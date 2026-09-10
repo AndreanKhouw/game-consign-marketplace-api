@@ -1,0 +1,1182 @@
+openapi: 3.1.0
+info:
+  title: Game Consign Public Marketplace API
+  version: 0.1.0
+  license:
+    name: Proprietary assessment submission
+    identifier: LicenseRef-Proprietary
+  description: |
+    Implemented contract for the hardened marketplace core. JSON field and enum
+    names use English snake_case. Unless a path explicitly overrides security,
+    a short-lived opaque bearer access token is required.
+servers:
+  - url: /
+    description: Same-origin API base; local Compose listens on port 3000
+tags:
+  - name: Identity
+    description: Registration, sessions, revocation, and the authenticated profile.
+  - name: Catalog
+    description: Public product discovery and product details.
+  - name: Seller
+    description: Seller-owned product mutations and seller-scoped order reads.
+  - name: Cart
+    description: Buyer cart mutation and optimistic cart versioning.
+  - name: Checkout
+    description: Transactional, idempotent cart consumption and order creation.
+  - name: Orders
+    description: Buyer-owned order detail reads.
+  - name: Payment webhook
+    description: Signed and idempotent simulated payment gateway callbacks.
+  - name: Health
+    description: Process liveness and dependency readiness probes.
+security:
+  - access_token: []
+paths:
+  /v1/auth/register:
+    post:
+      tags: [Identity]
+      summary: Submit buyer registration
+      description: |
+        Always returns the same accepted response whether the normalized email
+        was newly registered or already exists. This avoids account enumeration.
+      operationId: registerBuyer
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '202':
+          description: Registration request accepted without disclosing account existence.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericAccepted'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '429':
+          $ref: '#/components/responses/RateLimitedProblem'
+
+  /v1/auth/login:
+    post:
+      tags: [Identity]
+      summary: Create a user session
+      description: |
+        Returns an opaque access token and sets an opaque refresh token in a
+        Secure, HttpOnly, SameSite cookie. Invalid credentials always use the
+        same public error shape.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session created. The response also sets the refresh cookie.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              schema:
+                type: string
+              description: Opaque refresh cookie scoped to /v1/auth.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '401':
+          $ref: '#/components/responses/InvalidCredentialsProblem'
+        '429':
+          $ref: '#/components/responses/RateLimitedProblem'
+
+  /v1/auth/refresh:
+    post:
+      tags: [Identity]
+      summary: Rotate refresh token and issue a new access token
+      operationId: refreshSession
+      security:
+        - refresh_cookie: []
+      responses:
+        '200':
+          description: Refresh token rotated and access token issued.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              schema:
+                type: string
+              description: Rotated opaque refresh cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '429':
+          $ref: '#/components/responses/RateLimitedProblem'
+
+  /v1/auth/logout:
+    post:
+      tags: [Identity]
+      summary: Revoke the current session family
+      operationId: logout
+      security:
+        - access_token: []
+        - refresh_cookie: []
+      responses:
+        '204':
+          description: Session family revoked and refresh cookie cleared.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              schema:
+                type: string
+              description: Expired refresh cookie.
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+
+  /v1/me:
+    get:
+      tags: [Identity]
+      summary: Get the authenticated user profile
+      operationId: getMe
+      responses:
+        '200':
+          description: Current profile.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+
+  /v1/products:
+    get:
+      tags: [Catalog]
+      summary: Browse active products
+      operationId: listProducts
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Category'
+        - $ref: '#/components/parameters/MinPrice'
+        - $ref: '#/components/parameters/MaxPrice'
+        - $ref: '#/components/parameters/ProductSort'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Cursor-paginated active products.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '429':
+          $ref: '#/components/responses/RateLimitedProblem'
+
+  /v1/products/{product_id}:
+    get:
+      tags: [Catalog]
+      summary: Get one active product
+      operationId: getProduct
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      responses:
+        '200':
+          description: Product detail.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+
+  /v1/seller/products:
+    post:
+      tags: [Seller]
+      summary: Create a product owned by the authenticated seller
+      operationId: createSellerProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        '201':
+          description: Product created.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+
+  /v1/seller/products/{product_id}:
+    patch:
+      tags: [Seller]
+      summary: Update an owned product using optimistic versioning
+      operationId: updateSellerProduct
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProductRequest'
+      responses:
+        '200':
+          description: Product updated.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          description: Product does not exist or is not owned by this seller.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          $ref: '#/components/responses/VersionConflictProblem'
+
+  /v1/seller/orders:
+    get:
+      tags: [Seller]
+      summary: List orders scoped to the authenticated seller
+      operationId: listSellerOrders
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Cursor-paginated seller orders.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SellerOrderPage'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+
+  /v1/cart/items:
+    post:
+      tags: [Cart]
+      summary: Add quantity to an item in the buyer's active cart
+      description: |
+        Cart contents do not reserve stock. The response returns the new cart
+        version required by checkout.
+      operationId: addCartItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddCartItemRequest'
+      responses:
+        '200':
+          description: Active cart after the update.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '409':
+          $ref: '#/components/responses/VersionConflictProblem'
+
+  /v1/checkout:
+    post:
+      tags: [Checkout]
+      summary: Atomically consume a cart, decrement stock, and create an order
+      operationId: checkout
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '201':
+          description: Order created, or the stored response for an identical retry.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Idempotency-Replayed:
+              schema:
+                type: boolean
+              description: True when this is a stored replay response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutResponse'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '409':
+          description: Cart/version conflict, insufficient stock, or key reused with another request.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimitedProblem'
+
+  /v1/orders/{order_id}:
+    get:
+      tags: [Orders]
+      summary: Get an order owned by the authenticated buyer
+      operationId: getOrder
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Buyer-owned order detail.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '401':
+          $ref: '#/components/responses/InvalidSessionProblem'
+        '404':
+          description: Order does not exist or is not owned by this buyer.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /v1/webhooks/payment:
+    post:
+      tags: [Payment webhook]
+      summary: Process a signed payment-gateway event
+      description: |
+        Signature input is `X-Payment-Timestamp + "." + exact raw body` and uses
+        HMAC-SHA256. The timestamp must be within five minutes. Provider event ID
+        is durably unique.
+      operationId: receivePaymentWebhook
+      security:
+        - payment_signature: []
+      parameters:
+        - $ref: '#/components/parameters/PaymentTimestamp'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentWebhookEvent'
+      responses:
+        '200':
+          description: Event processed or recognized as an identical duplicate.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookAcknowledgement'
+        '400':
+          $ref: '#/components/responses/ValidationProblem'
+        '401':
+          description: Signature is absent, invalid, or outside the timestamp window.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Event identity/payload conflict or illegal payment transition.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimitedProblem'
+
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Process liveness probe
+      operationId: liveness
+      security: []
+      responses:
+        '200':
+          description: Process is live.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Dependency readiness probe
+      operationId: readiness
+      security: []
+      responses:
+        '200':
+          description: Required dependencies are ready.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: At least one required dependency is unavailable.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+components:
+  securitySchemes:
+    access_token:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Short-lived opaque access token.
+    refresh_cookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: Rotating opaque refresh-token cookie.
+    payment_signature:
+      type: apiKey
+      in: header
+      name: X-Payment-Signature
+      description: Hex-encoded HMAC-SHA256 of timestamp and exact raw body.
+
+  headers:
+    RequestId:
+      schema:
+        type: string
+        format: uuid
+      description: Server correlation identifier.
+
+  parameters:
+    ProductId:
+      name: product_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      name: order_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SearchQuery:
+      name: q
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 100
+    Category:
+      name: category
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 50
+    MinPrice:
+      name: min_price
+      in: query
+      description: Minimum IDR amount in minor units.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    MaxPrice:
+      name: max_price
+      in: query
+      description: Maximum IDR amount in minor units.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    ProductSort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        enum: [created_at_desc, price_asc, price_desc]
+        default: created_at_desc
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    PageLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    PaymentTimestamp:
+      name: X-Payment-Timestamp
+      in: header
+      required: true
+      schema:
+        type: integer
+        format: int64
+      description: Unix timestamp included in the signed message.
+
+  responses:
+    ValidationProblem:
+      description: Request validation failed.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InvalidCredentialsProblem:
+      description: Credentials are invalid without revealing which field failed.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InvalidSessionProblem:
+      description: Session is missing, expired, or revoked.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ForbiddenProblem:
+      description: Authenticated actor does not have the required capability.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFoundProblem:
+      description: Resource is absent or not visible to the current actor.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    VersionConflictProblem:
+      description: Expected resource version does not match current state.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RateLimitedProblem:
+      description: Rate limit exceeded.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, display_name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    GenericAccepted:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+          const: If the request can be completed, the account will be available shortly.
+
+    AccessTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          minLength: 32
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+          const: 600
+
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required: [id, email, display_name, roles, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        roles:
+          type: array
+          uniqueItems: true
+          maxItems: 4
+          items:
+            type: string
+            enum: [buyer, seller, admin]
+        created_at:
+          type: string
+          format: date-time
+
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          const: IDR
+
+    Product:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - seller_id
+        - seller_name
+        - name
+        - category
+        - price
+        - stock_quantity
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        seller_id:
+          type: string
+          format: uuid
+        seller_name:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        image_url:
+          type: string
+          format: uri
+          description: Stored reference only; the API never fetches this URL.
+        price:
+          $ref: '#/components/schemas/Money'
+        stock_quantity:
+          type: integer
+          format: int64
+          minimum: 0
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ProductPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Product'
+        next_cursor:
+          type: [string, 'null']
+        has_more:
+          type: boolean
+
+    CreateProductRequest:
+      type: object
+      additionalProperties: false
+      required: [name, category, price, stock_quantity]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+        category:
+          type: string
+          minLength: 1
+          maxLength: 50
+        image_url:
+          type: string
+          format: uri
+          maxLength: 2048
+        price:
+          $ref: '#/components/schemas/Money'
+        stock_quantity:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 1000000
+
+    UpdateProductRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      minProperties: 2
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+        category:
+          type: string
+          minLength: 1
+          maxLength: 50
+        image_url:
+          type: string
+          format: uri
+          maxLength: 2048
+        price:
+          $ref: '#/components/schemas/Money'
+        stock_adjustment:
+          type: integer
+          format: int64
+          minimum: -1000000
+          maximum: 1000000
+          description: Atomic delta; the resulting stock may not be negative.
+
+    AddCartItemRequest:
+      type: object
+      additionalProperties: false
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 100
+
+    CartItem:
+      type: object
+      additionalProperties: false
+      required: [product_id, name, quantity, current_price]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        quantity:
+          type: integer
+          format: int64
+          minimum: 1
+        current_price:
+          $ref: '#/components/schemas/Money'
+
+    Cart:
+      type: object
+      additionalProperties: false
+      required: [id, version, status, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [active, checked_out]
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CartItem'
+
+    CheckoutRequest:
+      type: object
+      additionalProperties: false
+      required: [cart_id, cart_version]
+      properties:
+        cart_id:
+          type: string
+          format: uuid
+        cart_version:
+          type: integer
+          minimum: 1
+
+    CheckoutResponse:
+      type: object
+      additionalProperties: false
+      required: [order_id, order_status, payment_reference, total, created_at]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        order_status:
+          type: string
+          const: pending_payment
+        payment_reference:
+          type: string
+          minLength: 16
+          maxLength: 100
+        total:
+          $ref: '#/components/schemas/Money'
+        created_at:
+          type: string
+          format: date-time
+
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required: [id, product_id, product_name, unit_price, quantity, line_total]
+      properties:
+        id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        product_name:
+          type: string
+        unit_price:
+          $ref: '#/components/schemas/Money'
+        quantity:
+          type: integer
+          format: int64
+          minimum: 1
+        line_total:
+          $ref: '#/components/schemas/Money'
+
+    SellerOrder:
+      type: object
+      additionalProperties: false
+      required: [id, seller_id, seller_name, status, subtotal, items, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        seller_id:
+          type: string
+          format: uuid
+        seller_name:
+          type: string
+        status:
+          type: string
+          enum: [pending_payment, paid, payment_failed]
+        subtotal:
+          $ref: '#/components/schemas/Money'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        created_at:
+          type: string
+          format: date-time
+
+    SellerOrderPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SellerOrder'
+        next_cursor:
+          type: [string, 'null']
+        has_more:
+          type: boolean
+
+    Order:
+      type: object
+      additionalProperties: false
+      required: [id, status, total, seller_orders, payment, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending_payment, paid, payment_failed]
+        total:
+          $ref: '#/components/schemas/Money'
+        seller_orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/SellerOrder'
+        payment:
+          $ref: '#/components/schemas/PaymentSummary'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PaymentSummary:
+      type: object
+      additionalProperties: false
+      required: [payment_reference, status, amount]
+      properties:
+        payment_reference:
+          type: string
+        status:
+          type: string
+          enum: [pending, paid, failed]
+        amount:
+          $ref: '#/components/schemas/Money'
+
+    PaymentWebhookEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - provider_event_id
+        - payment_reference
+        - status
+        - amount
+        - occurred_at
+      properties:
+        provider_event_id:
+          type: string
+          minLength: 8
+          maxLength: 128
+        payment_reference:
+          type: string
+          minLength: 16
+          maxLength: 100
+        status:
+          type: string
+          enum: [paid, failed]
+        amount:
+          $ref: '#/components/schemas/Money'
+        occurred_at:
+          type: string
+          format: date-time
+
+    WebhookAcknowledgement:
+      type: object
+      additionalProperties: false
+      required: [received, duplicate]
+      properties:
+        received:
+          type: boolean
+          const: true
+        duplicate:
+          type: boolean
+
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, request_id]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+          maxLength: 200
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+          pattern: '^[A-Z0-9_]+$'
+          examples:
+            - VALIDATION_FAILED
+            - INVALID_CREDENTIALS
+            - OUT_OF_STOCK
+            - IDEMPOTENCY_KEY_REUSED
+        detail:
+          type: string
+          maxLength: 1000
+        request_id:
+          type: string
+          format: uuid
+        errors:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, code]
+            properties:
+              field:
+                type: string
+                maxLength: 200
+              code:
+                type: string
+                maxLength: 100

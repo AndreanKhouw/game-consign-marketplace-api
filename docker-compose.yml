@@ -1,0 +1,114 @@
+services:
+  postgres:
+    image: postgres:16.8-bookworm
+    environment:
+      POSTGRES_DB: game_consign
+      POSTGRES_USER: game_consign
+      POSTGRES_PASSWORD: game_consign_dev
+    ports:
+      - '15432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U game_consign -d game_consign']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4.2-bookworm
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: dependencies
+    env_file: .env
+    command: ['pnpm', 'migrate']
+    volumes:
+      - ./migrations:/app/migrations:ro
+      - ./scripts:/app/scripts:ro
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    build:
+      context: .
+      target: dependencies
+    env_file: .env
+    command: ['pnpm', 'seed']
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./src:/app/src:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    stop_grace_period: 20s
+
+  test:
+    profiles: ['test']
+    build:
+      context: .
+      target: dependencies
+    env_file: .env
+    environment:
+      NODE_ENV: test
+      DATABASE_POOL_MAX: 60
+    command: ['pnpm', 'test']
+    volumes:
+      - ./src:/app/src:ro
+      - ./test:/app/test:ro
+      - ./scripts:/app/scripts:ro
+      - ./migrations:/app/migrations:ro
+      - ./vitest.unit.config.ts:/app/vitest.unit.config.ts:ro
+      - ./vitest.integration.config.ts:/app/vitest.integration.config.ts:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:

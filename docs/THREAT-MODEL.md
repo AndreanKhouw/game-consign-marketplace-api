@@ -38,13 +38,13 @@ mitigation from executable proof; remaining proof gaps are stated explicitly.
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | API1 Broken Object Level Authorization               | Buyer/order and seller/product queries include authenticated owner IDs; non-owned objects return 404                          | `SellerService.updateProduct`, `OrderService.getBuyerOrder`, and cross-seller test in `test/integration/core.test.ts`     |
 | API2 Broken Authentication                           | Salted scrypt, generic login failure with dummy verification, opaque tokens, rotation/reuse detection, server-side revocation | `src/platform/crypto.ts`, `IdentityService`, crypto unit test, refresh-reuse/logout integration tests                     |
-| API3 Broken Object Property Level Authorization      | Strict TypeBox request DTOs reject unknown fields; repositories never bind request objects directly                           | Route schemas under `src/modules/*/*-routes.ts`; seller ownership integration test                                        |
-| API4 Unrestricted Resource Consumption               | Body/page limits, distributed endpoint limits, statement/lock timeouts, bounded pools                                         | `buildApp` in `src/app.ts`, `loadConfig`, `registerLayeredRateLimit`; dedicated load thresholds remain a test gap         |
+| API3 Broken Object Property Level Authorization      | Strict TypeBox request DTOs reject unknown fields; repositories never bind request objects directly                           | Route schemas under `src/modules/*/*-routes.ts`; mass-assignment integration test                                         |
+| API4 Unrestricted Resource Consumption               | Body/page limits, distributed endpoint limits, statement/lock timeouts, bounded pools                                         | `buildApp`, `loadConfig`, `registerLayeredRateLimit`; identity hard-limit integration test and delay-rule unit test       |
 | API5 Broken Function Level Authorization             | Global default-deny hook plus explicit role requirements                                                                      | `registerAuthGuard` in `src/platform/auth-guard.ts` and route config declarations                                         |
-| API6 Unrestricted Access to Sensitive Business Flows | Per-IP plus keyed identity/user/token counters; progressive login/register delay without durable victim lockout               | `registerLayeredRateLimit` in `src/platform/layered-rate-limit.ts`; dedicated limiter test remains planned                |
+| API6 Unrestricted Access to Sensitive Business Flows | Per-IP plus keyed identity/user/token counters; progressive login/register delay without durable victim lockout               | `registerLayeredRateLimit`; distributed identity hard-limit integration test and progressive-delay unit test              |
 | API7 Server Side Request Forgery                     | Product image is validated/stored as a reference and no server fetch path exists                                              | Seller route schemas/repository and absence of outbound HTTP in catalog/seller modules                                    |
 | API8 Security Misconfiguration                       | Explicit CORS, Helmet, redaction, safe error mapping, secret validation, and separate health endpoints                        | `buildApp`, `loadConfig`, and `registerErrorHandler`                                                                      |
-| API9 Improper Inventory Management                   | Versioned `/v1` routes, maintained OpenAPI contract, locked dependency manifest                                               | `openapi.yaml`, `package.json`, Redocly validation; automated route-contract comparison remains planned                   |
+| API9 Improper Inventory Management                   | Versioned `/v1` routes, maintained OpenAPI contract, locked dependency manifest                                               | `openapi.yaml`, `package.json`, Redocly validation, and automated OpenAPI-to-Fastify route registration test              |
 | API10 Unsafe Consumption of APIs                     | Exact-raw-body HMAC, timestamp/amount/schema verification, durable event identity, monotonic transitions                      | `PaymentService.processWebhook`, `decidePaymentTransition`, crypto/payment-state unit tests, and webhook integration test |
 
 ## 3. Concrete attack scenarios
@@ -91,9 +91,9 @@ request, or uses different keys against the same cart.
 request fingerprint and stored response. The cart is locked/consumed and
 `orders.cart_id` is unique.
 
-**Proof:** Integration tests prove simultaneous same-key retries return one order
-and different keys cannot consume one cart twice. The different-payload 409 path
-is implemented but remains a dedicated test gap.
+**Proof:** Integration tests prove simultaneous same-key retries return one order,
+different keys cannot consume one cart twice, and a key reused with a different
+request returns a stable conflict.
 
 **Residual risk:** A process crash can strand a separately committed `processing`
 claim. The preferred implementation keeps claim and result in the checkout
@@ -111,7 +111,8 @@ audit event.
 
 **Proof:** The session lifecycle cases in `test/integration/core.test.ts` verify
 refresh reuse revokes the successor family and logout immediately invalidates the
-access token.
+access token. A changed `auth_version` invalidates existing access and refresh
+credentials in the mass-revocation regression test.
 
 **Residual risk:** Strict detection may revoke a legitimate session after a
 concurrent refresh from two tabs. Clients must single-flight refresh; a grace
@@ -126,9 +127,9 @@ sends conflicting status transitions.
 time, old timestamps are rejected, event IDs are unique, payload hashes detect
 conflicts, amount/currency must match, and payment transitions are monotonic.
 
-**Proof:** The webhook integration case covers valid, duplicate-identical,
-altered-signature, and stale events. Conflicting event-ID and illegal-transition
-cases are implemented protections that still need dedicated regression tests.
+**Proof:** The webhook integration cases cover valid, duplicate-identical,
+altered-signature, stale, conflicting event-ID, and illegal terminal-transition
+events, including rollback of the rejected event.
 
 **Residual risk:** A stolen webhook secret permits valid forgery until rotation.
 Production needs secret-manager access control, rotation, monitoring, and gateway
@@ -145,8 +146,8 @@ Distributed per-IP and keyed identity limits apply progressive delay without a
 global hard lockout.
 
 **Proof:** The crypto unit test proves salted hashing/verification; identity
-integration tests exercise public auth failures. A dedicated progressive-delay
-and threshold test remains planned.
+integration tests exercise public auth failures and the distributed hard limit;
+a unit test pins the progressive-delay thresholds.
 
 **Residual risk:** Perfect timing equality is not realistic across storage and
 network paths. Email delivery behavior, if later added, also needs a non-

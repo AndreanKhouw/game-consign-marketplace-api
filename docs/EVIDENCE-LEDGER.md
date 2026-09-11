@@ -4,6 +4,12 @@ This ledger separates assessment requirements, accepted decisions, executable
 implementation evidence, and residual risks. Migrations, code, and tests now
 supersede the original design-only baseline where they provide stronger evidence.
 
+The original external assessment document is not stored in this repository.
+Requirement comparison therefore uses the assessment section references already
+captured in this ledger, the system-design proof plan, the delivery gates, and the
+OpenAPI contract. A final submission audit should also compare against the source
+assessment if it is available outside the repository.
+
 | Claim                                                                   | Status   | Evidence                                                | Confidence | Design impact                                                           |
 | ----------------------------------------------------------------------- | -------- | ------------------------------------------------------- | ---------- | ----------------------------------------------------------------------- |
 | Guests can browse the catalog                                           | Current  | Assessment section 2.1.B                                | High       | Product reads are explicitly public                                     |
@@ -30,3 +36,17 @@ supersede the original design-only baseline where they provide stronger evidence
 3. First-slice currency: IDR only.
 4. Unpaid-order behavior remains an accepted residual risk for the time-boxed
    core; production requires reservation expiry and reconciliation.
+
+## Verification snapshot (2026-09-11)
+
+- Verified locally: type-checking, ESLint, Prettier, OpenAPI syntax validation,
+  production build, clean Docker Compose rebuild, 9 unit tests, and 25
+  PostgreSQL/Redis integration tests.
+- Fully covered delivery gates: identity/default deny, catalog/ownership,
+  transactional checkout, and signed payment webhook.
+- Submission automation covers route/OpenAPI registration, log redaction,
+  health endpoints, and the complete route-level buyer/seller happy path.
+- An isolated no-cache production image build and empty-volume bootstrap proved
+  migrations, seed, liveness, readiness, and public seeded-catalog access.
+- Production-scale load, soak, and representative query-plan evidence remain
+  outside the time-boxed core.

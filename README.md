@@ -6,10 +6,20 @@ modular monolith backed by PostgreSQL 16 and Redis 7.
 
 ## Run locally
 
-Requirements: Docker Desktop with Linux containers and Docker Compose v2.
+Requirements: Docker Desktop with Linux containers, or a compatible Docker
+Engine, with Docker Compose v2.
+
+Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
+docker compose up --build
+```
+
+macOS/Linux:
+
+```bash
+cp .env.example .env
 docker compose up --build
 ```
 
@@ -31,7 +41,7 @@ Run all tests, including real-PostgreSQL concurrency tests:
 docker compose --profile test run --rm test
 ```
 
-Run local static checks with Node/pnpm:
+Run local static checks with Node.js 22 or newer and pnpm 11:
 
 ```powershell
 pnpm check
@@ -40,14 +50,39 @@ pnpm build
 
 The complete HTTP contract and examples are in [openapi.yaml](openapi.yaml).
 
+## Verification status
+
+The latest workspace verification on 2026-09-11 passed TypeScript type-checking,
+ESLint, Prettier, Redocly OpenAPI linting, the production build, a clean Docker
+Compose rebuild, 9 unit tests, and 25 integration tests against PostgreSQL and
+Redis.
+
+The executable suite currently proves generic login failure, default-deny
+authentication, refresh-token reuse and mass revocation, immediate logout, buyer
+and seller object ownership, unknown-field rejection, optimistic version
+conflicts, SQL-safe catalog search, deterministic cursor pagination, constant
+catalog query count, last-unit checkout concurrency, same-key/different-key and
+different-payload idempotency, transaction rollback, amount-boundary rollback,
+valid/duplicate/altered/stale/conflicting payment webhooks, terminal payment
+transition rejection, distributed identity limits, log redaction, route/OpenAPI
+registration, and the complete buyer/seller happy path.
+
+The assessment-required proof paths are automated. A no-cache production image
+build and empty PostgreSQL-volume bootstrap were also completed successfully.
+Production-scale load, long-duration soak behavior, and query plans over
+representative catalog volume remain operational follow-up work. See [the
+delivery plan](docs/DELIVERY-PLAN.md) for the gate-by-gate status.
+
 ## Architecture
 
 The application is a modular monolith. Identity, catalog, seller, cart,
-checkout, payment, audit, and platform concerns have separate route, service,
-and repository boundaries, while one PostgreSQL transaction can still protect
-stock, cart consumption, order creation, payment creation, idempotency, and
-audit writes atomically. This keeps operational complexity proportional to the
-assessment while preserving seams for a later service split.
+checkout, payment, audit, and platform concerns have separate HTTP and
+application boundaries. Pure money and payment-transition rules do not depend
+on Fastify or PostgreSQL. Application transaction scripts intentionally keep the
+closely coupled SQL orchestration visible so one PostgreSQL transaction can
+protect stock, cart consumption, orders, payments, idempotency, and audit writes
+atomically. This keeps operational complexity proportional to the assessment
+while preserving seams for later repository ports or a service split.
 
 PostgreSQL is authoritative for durable security, money, stock, and duplicate
 protection. Redis holds distributed rate-limit counters only; it is not the
@@ -70,19 +105,27 @@ Key design evidence:
 ### Authentication and sessions
 
 Passwords use Node's salted `scrypt` with `N=32768`, `r=8`, `p=1`, a random
-16-byte salt, and a 64 MiB memory ceiling. Login uses one generic public error
-and performs dummy password verification for unknown accounts. Access and
-refresh credentials are random 256-bit opaque tokens; only SHA-256 lookup hashes
-are persisted. Access tokens live for 10 minutes and are sent as bearer tokens.
-Refresh tokens live for 14 days in an `HttpOnly`, `Secure` in production,
-`SameSite=Lax` cookie. Rotation is transactional, reuse revokes the complete
-session family, and logout invalidates current access immediately.
+16-byte salt, and a 64 MiB memory ceiling. This memory-hard, Node-native setting
+raises the cost of offline guesses while remaining practical for interactive
+login; production latency measurements should guide future tuning. Login uses
+one generic public error and performs dummy password verification for unknown
+accounts. Access and refresh credentials are random 256-bit opaque tokens; only
+SHA-256 lookup hashes are persisted. Access tokens live for 10 minutes to bound
+the useful life of a stolen bearer credential. Refresh tokens live for 14 days
+to balance session convenience against exposure, and use an `HttpOnly`, `Secure`
+in production, `SameSite=Lax` cookie. Rotation is transactional, reuse revokes
+the complete session family, and logout invalidates current access immediately.
+Each family snapshots `users.auth_version`; a password, privilege, or account
+status change can increment that version and revoke every family at once. The
+corresponding account-management endpoints are outside this assessment's scope.
 
 Bearer access keeps authenticated mutations outside ambient cookie authority,
-reducing CSRF exposure. Refresh/logout additionally enforce the configured
-Origin. Access tokens kept in SPA memory remain exposed to successful in-page
-XSS, so CSP, dependency hygiene, output encoding, and avoiding persistent browser
-storage remain required client controls.
+reducing CSRF exposure. Refresh/logout reject any supplied `Origin` that is not
+explicitly allowed; an absent `Origin` remains supported for non-browser clients,
+while `SameSite=Lax` limits normal cross-site browser cookie attachment. Access
+tokens kept in SPA memory remain exposed to successful in-page XSS, so CSP,
+dependency hygiene, output encoding, and avoiding persistent browser storage
+remain required client controls.
 
 ### Authorization and input boundaries
 
@@ -119,14 +162,20 @@ Authorization, cookie, token, password, and HMAC headers are redacted from
 structured logs. Each request receives a UUID request ID in logs, errors, and
 `X-Request-ID`. Sensitive state changes append audit rows. Liveness checks the
 process; readiness checks PostgreSQL and Redis. Shutdown drains HTTP work before
-closing dependency pools.
+closing dependency pools. Production PostgreSQL volumes must use encryption at
+rest and connections must use TLS. Plaintext email is limited to the user record;
+audit metadata stores a keyed email fingerprint, and structured logs do not
+intentionally record request bodies or plaintext PII.
 
 ## Time-box trade-offs and intentionally cut scope
 
 - Cart addition does not reserve stock. Stock is decremented at checkout as the
   assessment requests, so an abandoned unpaid order can strand inventory.
 - Cancellation, reservation expiry, refunds, fulfillment, shipment, tax,
-  commission, advanced search, partner auth, and admin APIs are excluded.
+  commission, advanced search, partner auth, and admin APIs are excluded. A
+  future partner API would use separately revocable confidential-client
+  credentials, explicit scopes, and credential rotation rather than reusing
+  first-party user sessions.
 - The payment gateway is simulated; webhook verification and failure semantics
   are real, but there is no outbound provider call or reconciliation worker.
 - IDR is the only currency. Multi-currency rounding and allocation rules are not
@@ -147,11 +196,10 @@ endpoints.
    payment-race handling, and inventory reconciliation.
 2. Add an outbound payment adapter with deadlines, provider idempotency keys,
    bounded backoff, circuit breaking, and a payment reconciliation job.
-3. Expand negative-path coverage for mass assignment, input boundaries,
-   idempotency-key payload conflicts, transaction rollback, buyer-to-buyer IDOR,
-   illegal payment transitions, rate limits, and log redaction.
-4. Add route/OpenAPI conformance tests, production-like catalog data, and
-   `EXPLAIN (ANALYZE, BUFFERS)` evidence for critical queries.
+3. Add property/fuzz tests for cursor decoding, canonical fingerprints, payment
+   event ordering, and invalid boundary inputs.
+4. Add production-like catalog data, load/soak tests, and recorded `EXPLAIN
+(ANALYZE, BUFFERS)` evidence for critical queries.
 5. Add a transactional outbox before notifications or cross-service events, plus
    metrics and alerts for lock waits, deadlocks, pool saturation, webhook lag,
    and stuck payments.
@@ -161,9 +209,8 @@ endpoints.
 ## Actual effort
 
 Approximately **11 active hours** across design/documentation, implementation,
-testing, security hardening, and environment troubleshooting. This was
-reconstructed from the working session rather than a dedicated timer and should
-be corrected by the candidate if their own tracked time differs.
+testing, security hardening, and environment troubleshooting. This estimate was
+reconstructed from the working sessions because a dedicated timer was not used.
 
 ## AI assistant usage
 

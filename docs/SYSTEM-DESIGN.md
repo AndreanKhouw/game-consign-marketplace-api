@@ -45,10 +45,9 @@ and must never reuse buyer sessions or a secret embedded in a first-party client
 
 ```text
 HTTP boundary
-  -> application command/query
-      -> domain rules
-          -> repository / transaction port
-              -> PostgreSQL
+  -> application command/query and transaction orchestration
+      -> pure domain rules
+      -> PostgreSQL adapter / transaction
 
 Modules:
   identity       users, roles, sessions, refresh rotation
@@ -61,9 +60,12 @@ Modules:
   platform       request ID, errors, limits, health, shutdown
 ```
 
-HTTP and persistence types do not cross into domain rules. Cross-module writes
-are coordinated by an application-level unit of work; individual modules do not
-write another module's tables directly outside that orchestration.
+Fastify and PostgreSQL types do not cross into pure domain rules such as
+`payment-state.ts` and `checkout-domain.ts`. Application services are explicit
+transaction scripts and may depend on PostgreSQL when coordinating cross-table
+atomicity. This is a deliberate small-system trade-off: repository ports should
+be introduced when a second persistence implementation or independently tested
+application orchestration justifies the abstraction.
 
 ## 4. Trust boundaries
 
@@ -288,22 +290,28 @@ smaller than the PostgreSQL connection budget.
 - Network calls have connection and request deadlines, bounded retries with
   jitter, and no retries for non-idempotent operations without a provider key.
 
-## 15. Proof plan
+## 15. Proof plan and current coverage
 
 Integration tests use the real PostgreSQL transaction and locking behavior:
 
-1. Fifty or more simultaneous attempts for one remaining unit produce exactly
-   one successful checkout, zero remaining stock, and one order.
-2. Simultaneous checkouts with the same idempotency key return one order result.
-3. Different idempotency keys against the same cart still produce one order.
-4. Seller A cannot mutate Seller B's product and Buyer A cannot read Buyer B's
-   order.
-5. Valid webhook succeeds; altered body, wrong signature, stale timestamp, reused
-   event ID with different body, and illegal transition cannot change payment.
-6. Refresh rotation, strict reuse detection, logout, and mass revocation invalidate
-   the expected sessions.
-7. Transaction failure on any line item rolls back stock decrements and order
-   writes.
+1. **Verified:** Fifty or more simultaneous attempts for one remaining unit
+   produce exactly one successful checkout, zero remaining stock, and one order.
+2. **Verified:** Simultaneous checkouts with the same idempotency key return one
+   order result.
+3. **Verified:** Different idempotency keys against the same cart still produce
+   one order.
+4. **Verified:** Seller A cannot mutate Seller B's product and Buyer A cannot read
+   Buyer B's order.
+5. **Verified:** Valid, duplicate-identical, altered-body, stale, conflicting
+   event ID, and illegal terminal-transition webhook cases pass through HTTP and
+   PostgreSQL.
+6. **Verified:** Refresh rotation/reuse detection, logout, and mass revocation
+   through `auth_version` invalidate the expected credentials.
+7. **Verified:** Transaction failure on any line item and aggregate amount
+   overflow roll back stock and all order/payment writes.
+8. **Verified:** Identity hard limits, progressive delay rules, structured-log
+   redaction, OpenAPI route registration, health probes, and the route-level
+   buyer/seller happy path are covered.
 
 ## 16. Scale path
 

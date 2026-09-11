@@ -20,6 +20,9 @@ an automatic claim that every desirable regression test exists.
 **Exit:** decisions are recorded in ADRs and the OpenAPI document passes syntax
 validation.
 
+**Current status (2026-09-11): Verified.** ADRs are present and Redocly validation
+passes.
+
 ## Gate 1: reproducible platform foundation
 
 Create the application manifest, Dockerfile, Compose stack, `.env.example`,
@@ -30,6 +33,10 @@ and readiness.
 **Exit:** a clean checkout starts with one documented command and migrations/seed
 produce buyer and seller demo accounts without production secrets.
 
+**Current status (2026-09-11): Verified.** A no-cache production image build and
+an isolated empty-volume bootstrap completed migrations, seed, liveness,
+readiness, and public seeded-catalog access successfully.
+
 ## Gate 2: identity and default-deny authorization
 
 Implement registration, login, refresh, logout, `/me`, salted scrypt, server-side
@@ -38,6 +45,10 @@ helpers, and layered rate limits.
 
 **Exit:** authentication success/failure, logout, refresh reuse, mass revocation,
 and default-deny tests pass.
+
+**Current status (2026-09-11): Verified.** Authentication success/failure, logout,
+refresh reuse, mass revocation through `auth_version`, default-deny behavior,
+progressive-delay rules, and the distributed identity hard limit are covered.
 
 ## Gate 3: public catalog and seller ownership
 
@@ -48,6 +59,9 @@ scoped order query skeleton.
 **Exit:** SQL-injection boundary, pagination, N+1/query-count, mass-assignment,
 version-conflict, and cross-seller tests pass.
 
+**Current status (2026-09-11): Verified.** Every listed Gate 3 exit check has a
+passing PostgreSQL-backed integration test.
+
 ## Gate 4: cart and transactional checkout
 
 Implement active-cart versioning, cart item commands, durable idempotency, sorted
@@ -57,6 +71,11 @@ payment reference, audit records, and cart consumption.
 **Exit:** rollback, last-unit concurrency, same-key concurrency, different-key
 same-cart, amount boundary, and buyer ownership tests pass against PostgreSQL.
 
+**Current status (2026-09-11): Verified.** Last-unit concurrency, same-key retry,
+different-key same-cart protection, buyer ownership, multi-item rollback,
+amount-boundary rollback, and reuse of one key with a different request are
+covered against PostgreSQL.
+
 ## Gate 5: signed payment webhook
 
 Implement raw-body capture, HMAC verification, timestamp window, durable event
@@ -65,6 +84,10 @@ auditing.
 
 **Exit:** valid, forged, altered, stale, duplicate, conflicting duplicate, and
 out-of-order cases pass.
+
+**Current status (2026-09-11): Verified.** Valid, duplicate-identical,
+altered-body, stale, conflicting duplicate event ID, and illegal terminal
+transition cases are covered through the HTTP and PostgreSQL boundary.
 
 ## Gate 6: submission and defense readiness
 
@@ -76,6 +99,12 @@ two-week plan, actual time, and AI verification disclosure.
 **Exit:** another person can run and test the API in under ten minutes, and the
 candidate can trace session, checkout, stock, and webhook flows without relying
 on generated explanations.
+
+**Current status (2026-09-11): Verified.** Type-checking, linting, formatting,
+OpenAPI syntax linting, a no-cache production build, an empty-volume Compose
+bootstrap, 9 unit tests, and 25 integration tests pass. Automated route/OpenAPI
+registration, log redaction, health endpoints, and the full buyer/seller happy
+path are covered.
 
 ## Suggested commit sequence
 

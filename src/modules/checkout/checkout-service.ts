@@ -7,6 +7,7 @@ import type { AppConfig } from '../../platform/config.js';
 import { canonicalFingerprint, randomReference } from '../../platform/crypto.js';
 import { withTransaction } from '../../platform/database.js';
 import { AppError } from '../../platform/errors.js';
+import { calculateLineTotal, calculateOrderTotal } from './checkout-domain.js';
 
 interface CheckoutInput {
   buyerId: string;
@@ -225,15 +226,15 @@ export class CheckoutService {
       if (!product) {
         throw new AppError(409, 'OUT_OF_STOCK', 'One or more products are unavailable');
       }
-      const lineTotal = Number(product.price_minor) * quantity;
-      if (!Number.isSafeInteger(lineTotal)) {
+      const lineTotal = calculateLineTotal(Number(product.price_minor), quantity);
+      if (!lineTotal.ok) {
         throw new AppError(409, 'AMOUNT_OUT_OF_RANGE', 'Order amount is outside supported range');
       }
-      lockedProducts.push({ ...product, quantity, lineTotal });
+      lockedProducts.push({ ...product, quantity, lineTotal: lineTotal.amountMinor });
     }
 
-    const total = lockedProducts.reduce((sum, item) => sum + item.lineTotal, 0);
-    if (!Number.isSafeInteger(total)) {
+    const total = calculateOrderTotal(lockedProducts.map((item) => item.lineTotal));
+    if (!total.ok) {
       throw new AppError(409, 'AMOUNT_OUT_OF_RANGE', 'Order amount is outside supported range');
     }
 
@@ -241,7 +242,7 @@ export class CheckoutService {
       `INSERT INTO orders (buyer_id, cart_id, total_minor, currency)
        VALUES ($1, $2, $3, 'IDR')
        RETURNING id, created_at`,
-      [input.buyerId, cart.id, total],
+      [input.buyerId, cart.id, total.amountMinor],
     );
     const order = orderResult.rows[0]!;
 
@@ -287,7 +288,7 @@ export class CheckoutService {
     await client.query(
       `INSERT INTO payments (order_id, payment_reference, amount_minor, currency)
        VALUES ($1, $2, $3, 'IDR')`,
-      [order.id, paymentReference, total],
+      [order.id, paymentReference, total.amountMinor],
     );
     await client.query(
       `UPDATE carts
@@ -302,14 +303,14 @@ export class CheckoutService {
       targetId: order.id,
       outcome: 'success',
       requestId: input.requestId,
-      safeMetadata: { cart_id: cart.id, amount_minor: total, currency: 'IDR' },
+      safeMetadata: { cart_id: cart.id, amount_minor: total.amountMinor, currency: 'IDR' },
     });
 
     return {
       order_id: order.id,
       order_status: 'pending_payment',
       payment_reference: paymentReference,
-      total: { amount_minor: total, currency: 'IDR' },
+      total: { amount_minor: total.amountMinor, currency: 'IDR' },
       created_at: order.created_at.toISOString(),
     };
   }

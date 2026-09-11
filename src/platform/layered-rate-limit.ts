@@ -14,6 +14,11 @@ end
 return current
 `;
 
+export function progressiveDelayMs(count: number, limit: number): number {
+  if (count <= 3 || count > limit) return 0;
+  return Math.min((count - 3) * 100, 700);
+}
+
 export function registerLayeredRateLimit(
   app: FastifyInstance,
   redis: Redis,
@@ -47,14 +52,11 @@ export function registerLayeredRateLimit(
     if (!key) return;
     const bucket = Math.floor(Date.now() / 60_000);
     const count = Number(await redis.eval(FIXED_WINDOW_SCRIPT, 1, `rate:${key}:${bucket}`, '65'));
-    if (
+    const progressiveDelay =
       (request.routeOptions.url === '/v1/auth/login' ||
         request.routeOptions.url === '/v1/auth/register') &&
-      count > 3 &&
-      count <= limit
-    ) {
-      await delay(Math.min((count - 3) * 100, 700));
-    }
+      progressiveDelayMs(count, limit);
+    if (progressiveDelay) await delay(progressiveDelay);
     if (count > limit) {
       throw new AppError(429, 'RATE_LIMITED', 'Too many requests');
     }

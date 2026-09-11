@@ -97,6 +97,7 @@ services:
       - ./test:/app/test:ro
       - ./scripts:/app/scripts:ro
       - ./migrations:/app/migrations:ro
+      - ./openapi.yaml:/app/openapi.yaml:ro
       - ./vitest.unit.config.ts:/app/vitest.unit.config.ts:ro
       - ./vitest.integration.config.ts:/app/vitest.integration.config.ts:ro
       - ./tsconfig.json:/app/tsconfig.json:ro

@@ -568,6 +568,7 @@ components:
         type: integer
         format: int64
         minimum: 0
+        maximum: 1000000000000
     MaxPrice:
       name: max_price
       in: query
@@ -576,6 +577,7 @@ components:
         type: integer
         format: int64
         minimum: 0
+        maximum: 1000000000000
     ProductSort:
       name: sort
       in: query
@@ -809,7 +811,7 @@ components:
         category:
           type: string
         image_url:
-          type: string
+          type: [string, 'null']
           format: uri
           description: Stored reference only; the API never fetches this URL.
         price:

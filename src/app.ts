@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Writable } from 'node:stream';
 
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
@@ -30,16 +31,29 @@ import { createRedis } from './platform/redis.js';
 const SAFE_REQUEST_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export async function buildApp(config: AppConfig = loadConfig()): Promise<FastifyInstance> {
+interface BuildAppOptions {
+  loggerStream?: Writable;
+}
+
+export async function buildApp(
+  config: AppConfig = loadConfig(),
+  options: BuildAppOptions = {},
+): Promise<FastifyInstance> {
   const pool = createDatabasePool(config);
   const redis = createRedis(config);
   await redis.connect();
 
   const app = Fastify({
+    ajv: {
+      customOptions: {
+        removeAdditional: false,
+      },
+    },
     trustProxy: config.trustProxy,
     bodyLimit: config.maxBodyBytes,
     logger: {
       level: config.logLevel,
+      ...(options.loggerStream ? { stream: options.loggerStream } : {}),
       redact: {
         paths: [
           'req.headers.authorization',
@@ -47,10 +61,24 @@ export async function buildApp(config: AppConfig = loadConfig()): Promise<Fastif
           'req.headers.x-payment-signature',
           'request.headers.authorization',
           'request.headers.cookie',
+          'request.headers.x-payment-signature',
+          'authorization',
+          'cookie',
           'password',
+          'access_token',
+          'refresh_token',
           '*.password',
           '*.access_token',
           '*.refresh_token',
+          'body.password',
+          'body.access_token',
+          'body.refresh_token',
+          'req.body.password',
+          'req.body.access_token',
+          'req.body.refresh_token',
+          'request.body.password',
+          'request.body.access_token',
+          'request.body.refresh_token',
         ],
         censor: '[REDACTED]',
       },
